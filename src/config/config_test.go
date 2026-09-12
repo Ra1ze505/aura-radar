@@ -11,6 +11,10 @@ func TestLoadFallbacksAndDefaults(t *testing.T) {
 	t.Setenv("AURA_RADAR_BOT_TOKEN", "tg-secret")
 	t.Setenv("AURA_RADAR_OPENAI_API_KEY", "llm-secret")
 	t.Setenv("OPENAI_MODEL", "x-ai/grok-4.6")
+	t.Setenv("OPENAI_TRANSCRIBE_MODEL", "")
+	t.Setenv("AURA_STT_TIMEOUT_SEC", "")
+	t.Setenv("AURA_MEDIA_MAX_SEC", "")
+	t.Setenv("AURA_MEDIA_MAX_BYTES", "")
 	t.Setenv("AURA_ALLOWED_CHAT_ID", "-1004468217243")
 	t.Setenv("AURA_ALLOWED_CHAT_TITLE", "Winter Arc 🪦")
 
@@ -29,6 +33,15 @@ func TestLoadFallbacksAndDefaults(t *testing.T) {
 	}
 	if cfg.TextChatCooldown != DefaultTextChatCooldown*time.Second {
 		t.Fatalf("text cooldown %v", cfg.TextChatCooldown)
+	}
+	if cfg.TranscribeModel != DefaultTranscribeModel {
+		t.Fatalf("transcribe model %q", cfg.TranscribeModel)
+	}
+	if cfg.STTTimeout != DefaultSTTTimeoutSec*time.Second {
+		t.Fatalf("stt timeout %v", cfg.STTTimeout)
+	}
+	if cfg.MediaMaxSec != DefaultMediaMaxSec || cfg.MediaMaxBytes != DefaultMediaMaxBytes {
+		t.Fatalf("media caps %d %d", cfg.MediaMaxSec, cfg.MediaMaxBytes)
 	}
 	if cfg.AllowedChatID != -1004468217243 {
 		t.Fatalf("allowed chat id %d", cfg.AllowedChatID)

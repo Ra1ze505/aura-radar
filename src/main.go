@@ -15,6 +15,7 @@ import (
 	"github.com/Ra1ze505/aura-radar/src/config"
 	"github.com/Ra1ze505/aura-radar/src/judge"
 	"github.com/Ra1ze505/aura-radar/src/store"
+	"github.com/Ra1ze505/aura-radar/src/transcribe"
 
 	tele "gopkg.in/telebot.v4"
 )
@@ -65,7 +66,12 @@ func main() {
 		j = judge.NewOpenAI(cfg.OpenAIAPIKey, cfg.OpenAIBaseURL, cfg.OpenAIModel, cfg.LLMTimeout)
 	}
 
-	app := bot.New(cfg, st, j, bot.NewTelePoster(b), log, b.Me.Username)
+	poster := bot.NewTelePoster(b)
+	app := bot.New(cfg, st, j, poster, log, b.Me.Username)
+	if cfg.OpenAIAPIKey != "" {
+		stt := transcribe.New(cfg.OpenAIAPIKey, cfg.OpenAIBaseURL, cfg.TranscribeModel, cfg.STTTimeout)
+		app.SetSpeech(poster, stt)
+	}
 	bot.Register(b, app)
 
 	cmds := []tele.Command{
