@@ -1,0 +1,8 @@
+---
+description: Aura Radar product spec is the source of truth
+alwaysApply: true
+---
+
+Product and implementation slices live in `docs/tz.md`. Operational invariants live in `AGENTS.md`.
+
+Stack is Go, not Python. Autoradar: frequent reactions, rare text. `/aura` on a saved event explains and does not rescore. Do not invent features from TZ §2.2. Do not mix aura scores across chats. Never ask the user to paste `BOT_TOKEN` or `OPENAI_API_KEY` into chat; secrets go through Cursor Runtime Secrets (TZ §13.4). Change product only by editing `docs/tz.md`.

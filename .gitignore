@@ -7,3 +7,7 @@ __pycache__/
 *.pyc
 node_modules/
 .DS_Store
+/bin/
+/data/
+*.exe
+aura-radar
