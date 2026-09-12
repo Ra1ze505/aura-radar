@@ -1,0 +1,8 @@
+---
+description: Aura Radar product spec is the source of truth
+alwaysApply: true
+---
+
+Product and implementation slices live in `docs/tz.md`. Operational invariants live in `AGENTS.md`.
+
+Do not invent features from TZ §2.2. Do not weaken autoradar silence rules in §8. Do not mix aura scores across chats. Change product only by editing `docs/tz.md`.
