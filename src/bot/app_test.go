@@ -1,7 +1,9 @@
 package bot
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -59,6 +61,11 @@ func setupApp(t *testing.T, j judge.Judge, poster Poster) (*App, store.Store) {
 		ContextMessages:    30,
 		MinTextLen:         8,
 		LLMTimeout:         time.Second,
+		STTTimeout:         40 * time.Second,
+		VisionTimeout:      40 * time.Second,
+		MediaMaxSec:        90,
+		MediaMaxBytes:      20_000_000,
+		TranscribeModel:    "whisper-test",
 		ReactMinConfidence: 0.62,
 		ReactMinAbsDelta:   80,
 		ReactChatCooldown:  12 * time.Second,
@@ -304,5 +311,392 @@ func TestFormatCard(t *testing.T) {
 	s := FormatCard(aura.VerdictWeak, -800, "🤡", "объяснил шутку. шутка не выжила.")
 	if !strings.Contains(s, "слабая аура") || !strings.Contains(s, "−800") {
 		t.Fatal(s)
+	}
+}
+
+type stubOpen struct {
+	calls int
+	err   error
+	data  []byte
+}
+
+func (o *stubOpen) OpenMedia(context.Context, string) (io.ReadCloser, error) {
+	o.calls++
+	if o.err != nil {
+		return nil, o.err
+	}
+	if o.data == nil {
+		o.data = []byte("ogg")
+	}
+	return io.NopCloser(bytes.NewReader(o.data)), nil
+}
+
+type stubSTT struct {
+	calls    int
+	text     string
+	err      error
+	filename string
+}
+
+func (s *stubSTT) Transcribe(_ context.Context, _ io.Reader, filename, _ string) (string, error) {
+	s.calls++
+	s.filename = filename
+	if s.err != nil {
+		return "", s.err
+	}
+	return s.text, nil
+}
+
+type recJudge struct {
+	last   judge.PromptInput
+	Result judge.Result
+	Err    error
+}
+
+func (j *recJudge) Evaluate(_ context.Context, in judge.PromptInput) (judge.Result, error) {
+	j.last = in
+	return j.Result, j.Err
+}
+
+func mediaWinter(id int, user store.User, kind, fileID string) Incoming {
+	in := winter(id, user, "")
+	in.MediaKind = kind
+	in.FileID = fileID
+	in.Duration = 4
+	in.FileSize = 1200
+	return in
+}
+
+func TestVoiceAutoTranscribesAndJudges(t *testing.T) {
+	emoji := "🗿"
+	j := &recJudge{Result: judge.Result{
+		Verdict: aura.VerdictStrong, Delta: 200, Confidence: 0.85,
+		Comment: "зашло голосом.", Reaction: &emoji,
+	}}
+	p := &recPosterText{}
+	app, st := setupApp(t, j, p)
+	open := &stubOpen{}
+	stt := &stubSTT{text: "закрыл тему одной фразой в голосовом"}
+	app.SetSpeech(open, stt)
+	ctx := context.Background()
+	in := mediaWinter(20, store.User{ID: 11, FirstName: "V"}, MediaVoice, "voice-1")
+	if err := app.Handle(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	if stt.calls != 1 || open.calls != 1 {
+		t.Fatalf("stt=%d open=%d", stt.calls, open.calls)
+	}
+	if !strings.HasPrefix(j.last.Target.Text, "[голос] ") {
+		t.Fatalf("judge text %q", j.last.Target.Text)
+	}
+	if len(p.reacts) != 1 {
+		t.Fatalf("reacts %v", p.reacts)
+	}
+	_, ok, _ := st.GetEvent(ctx, -100, 20)
+	if !ok {
+		t.Fatal("expected auto event")
+	}
+	buf, err := st.ContextBefore(ctx, -100, 21, 10)
+	if err != nil || len(buf) != 1 || !strings.Contains(buf[0].Text, "[голос]") {
+		t.Fatalf("buffer %+v err=%v", buf, err)
+	}
+}
+
+func TestCircleAndVideoPrefixes(t *testing.T) {
+	emoji := "🤡"
+	j := &recJudge{Result: judge.Result{
+		Verdict: aura.VerdictWeak, Delta: -120, Confidence: 0.8,
+		Comment: "кружок мимо.", Reaction: &emoji,
+	}}
+	p := &recPosterText{}
+	app, _ := setupApp(t, j, p)
+	stt := &stubSTT{text: "ща объясню этот мем всем в кружке"}
+	app.SetSpeech(&stubOpen{}, stt)
+	ctx := context.Background()
+	circle := mediaWinter(21, store.User{ID: 12, FirstName: "C"}, MediaCircle, "vn-1")
+	if err := app.Handle(ctx, circle); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(j.last.Target.Text, "[кружок] ") {
+		t.Fatalf("circle %q", j.last.Target.Text)
+	}
+	app.now = func() time.Time { return time.Date(2026, 9, 12, 12, 0, 20, 0, time.UTC) }
+	stt.text = "коротко закрыл тему на видео да"
+	video := mediaWinter(22, store.User{ID: 13, FirstName: "D"}, MediaVideo, "vid-1")
+	if err := app.Handle(ctx, video); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(j.last.Target.Text, "[видео] ") {
+		t.Fatalf("video %q", j.last.Target.Text)
+	}
+}
+
+func TestAuraEmptyTranscriptNoScore(t *testing.T) {
+	j := &recJudge{Result: judge.Result{Verdict: aura.VerdictStrong, Delta: 400, Confidence: 0.9, Comment: "x"}}
+	p := &recPosterText{}
+	app, st := setupApp(t, j, p)
+	stt := &stubSTT{text: "   "}
+	app.SetSpeech(&stubOpen{}, stt)
+	ctx := context.Background()
+	target := mediaWinter(30, store.User{ID: 1, FirstName: "A"}, MediaVoice, "v")
+	cmd := winter(31, store.User{ID: 2, FirstName: "B"}, "/aura")
+	cmd.Reply = &target
+	if err := app.Handle(ctx, cmd); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.texts) != 1 || p.texts[0] != MsgNoVoice {
+		t.Fatalf("replies %q", p.texts)
+	}
+	if _, ok, _ := st.GetEvent(ctx, -100, 30); ok {
+		t.Fatal("no event on empty stt")
+	}
+	if _, ok, _ := st.GetScore(ctx, -100, 1); ok {
+		t.Fatal("no score on empty stt")
+	}
+}
+
+func TestAutoEmptySTTSilent(t *testing.T) {
+	j := &recJudge{Result: judge.Result{Verdict: aura.VerdictStrong, Delta: 200, Confidence: 0.9, Comment: "x"}}
+	p := &recPosterText{}
+	app, st := setupApp(t, j, p)
+	stt := &stubSTT{text: ""}
+	app.SetSpeech(&stubOpen{}, stt)
+	ctx := context.Background()
+	in := mediaWinter(32, store.User{ID: 9, FirstName: "E"}, MediaVoice, "v2")
+	if err := app.Handle(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	if stt.calls != 1 {
+		t.Fatalf("stt calls %d", stt.calls)
+	}
+	if len(p.reacts) != 0 || len(p.texts) != 0 {
+		t.Fatalf("must be silent reacts=%v texts=%v", p.reacts, p.texts)
+	}
+	if _, ok, _ := st.GetEvent(ctx, -100, 32); ok {
+		t.Fatal("no auto event")
+	}
+}
+
+func TestVideoCaptionSkipsSTT(t *testing.T) {
+	emoji := "🗿"
+	j := &recJudge{Result: judge.Result{
+		Verdict: aura.VerdictStrong, Delta: 150, Confidence: 0.8, Comment: "подпись.", Reaction: &emoji,
+	}}
+	p := &recPosterText{}
+	app, _ := setupApp(t, j, p)
+	stt := &stubSTT{text: "это не должно вызваться"}
+	app.SetSpeech(&stubOpen{}, stt)
+	ctx := context.Background()
+	in := mediaWinter(33, store.User{ID: 4, FirstName: "F"}, MediaVideo, "vid")
+	in.Text = "достаточно длинная подпись к ролику"
+	if err := app.Handle(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	if stt.calls != 0 {
+		t.Fatalf("stt should skip caption, calls=%d", stt.calls)
+	}
+	if j.last.Target.Text != in.Text {
+		t.Fatalf("caption lost: %q", j.last.Target.Text)
+	}
+}
+
+func TestMediaTooLongAuraNoDownload(t *testing.T) {
+	p := &recPosterText{}
+	app, _ := setupApp(t, &recJudge{}, p)
+	open := &stubOpen{}
+	app.SetSpeech(open, &stubSTT{text: "длинный монолог который не должны качать"})
+	ctx := context.Background()
+	target := mediaWinter(34, store.User{ID: 1, FirstName: "A"}, MediaVoice, "long")
+	target.Duration = 120
+	cmd := winter(35, store.User{ID: 2}, "/aura")
+	cmd.Reply = &target
+	if err := app.Handle(ctx, cmd); err != nil {
+		t.Fatal(err)
+	}
+	if open.calls != 0 {
+		t.Fatalf("must not download, open=%d", open.calls)
+	}
+	if len(p.texts) != 1 || p.texts[0] != MsgNoVoice {
+		t.Fatalf("%q", p.texts)
+	}
+}
+
+func TestAuraVoiceEvaluatesTranscript(t *testing.T) {
+	emoji := "🔥"
+	j := &recJudge{Result: judge.Result{
+		Verdict: aura.VerdictStrong, Delta: 350, Confidence: 0.92,
+		Comment: "голос в точку.", Reaction: &emoji,
+	}}
+	p := &recPosterText{}
+	app, st := setupApp(t, j, p)
+	app.SetSpeech(&stubOpen{}, &stubSTT{text: "закрыл тему коротко и ясно голосом"})
+	ctx := context.Background()
+	target := mediaWinter(36, store.User{ID: 1, FirstName: "A"}, MediaVoice, "v")
+	cmd := winter(37, store.User{ID: 2, FirstName: "B"}, "/aura")
+	cmd.Reply = &target
+	if err := app.Handle(ctx, cmd); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(j.last.Target.Text, "[голос]") {
+		t.Fatalf("prompt %q", j.last.Target.Text)
+	}
+	sc, ok, _ := st.GetScore(ctx, -100, 1)
+	if !ok || sc.Points != 350 {
+		t.Fatalf("score %+v ok=%v", sc, ok)
+	}
+	if len(p.texts) != 1 || !strings.Contains(p.texts[0], "+350") {
+		t.Fatalf("reply %q", p.texts)
+	}
+}
+
+type stubVision struct {
+	calls int
+	text  string
+	err   error
+}
+
+func (s *stubVision) Describe(context.Context, io.Reader, string, string) (string, error) {
+	s.calls++
+	if s.err != nil {
+		return "", s.err
+	}
+	return s.text, nil
+}
+
+func TestPhotoAutoDescribesAndJudges(t *testing.T) {
+	emoji := "🤣"
+	j := &recJudge{Result: judge.Result{
+		Verdict: aura.VerdictStrong, Delta: 250, Confidence: 0.88,
+		Comment: "мем без подписи.", Reaction: &emoji,
+	}}
+	p := &recPosterText{}
+	app, st := setupApp(t, j, p)
+	vis := &stubVision{text: "кот в очках закрыл тему одним взглядом"}
+	app.SetSpeech(&stubOpen{data: []byte("\xff\xd8\xff")}, nil)
+	app.SetVision(vis)
+	ctx := context.Background()
+	in := mediaWinter(40, store.User{ID: 21, FirstName: "P"}, MediaPhoto, "ph-1")
+	in.Duration = 0
+	if err := app.Handle(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	if vis.calls != 1 {
+		t.Fatalf("vision calls %d", vis.calls)
+	}
+	if !strings.HasPrefix(j.last.Target.Text, "[фото] ") {
+		t.Fatalf("judge text %q", j.last.Target.Text)
+	}
+	if len(p.reacts) != 1 {
+		t.Fatalf("reacts %v", p.reacts)
+	}
+	if _, ok, _ := st.GetEvent(ctx, -100, 40); !ok {
+		t.Fatal("expected auto event")
+	}
+}
+
+func TestAuraEmptyVisionNoScore(t *testing.T) {
+	j := &recJudge{Result: judge.Result{Verdict: aura.VerdictStrong, Delta: 400, Confidence: 0.9, Comment: "x"}}
+	p := &recPosterText{}
+	app, st := setupApp(t, j, p)
+	app.SetSpeech(&stubOpen{data: []byte("\xff\xd8\xff")}, nil)
+	app.SetVision(&stubVision{text: "  "})
+	ctx := context.Background()
+	target := mediaWinter(41, store.User{ID: 1, FirstName: "A"}, MediaPhoto, "ph")
+	target.Duration = 0
+	cmd := winter(42, store.User{ID: 2, FirstName: "B"}, "/aura")
+	cmd.Reply = &target
+	if err := app.Handle(ctx, cmd); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.texts) != 1 || p.texts[0] != MsgNoImage {
+		t.Fatalf("replies %q", p.texts)
+	}
+	if _, ok, _ := st.GetEvent(ctx, -100, 41); ok {
+		t.Fatal("no event")
+	}
+}
+
+func TestAutoEmptyVisionSilent(t *testing.T) {
+	j := &recJudge{Result: judge.Result{Verdict: aura.VerdictStrong, Delta: 200, Confidence: 0.9, Comment: "x"}}
+	p := &recPosterText{}
+	app, st := setupApp(t, j, p)
+	vis := &stubVision{text: ""}
+	app.SetSpeech(&stubOpen{data: []byte("\xff\xd8\xff")}, nil)
+	app.SetVision(vis)
+	ctx := context.Background()
+	in := mediaWinter(43, store.User{ID: 9, FirstName: "E"}, MediaPhoto, "ph2")
+	in.Duration = 0
+	if err := app.Handle(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	if vis.calls != 1 {
+		t.Fatalf("vision calls %d", vis.calls)
+	}
+	if len(p.reacts) != 0 || len(p.texts) != 0 {
+		t.Fatalf("must be silent reacts=%v texts=%v", p.reacts, p.texts)
+	}
+	if _, ok, _ := st.GetEvent(ctx, -100, 43); ok {
+		t.Fatal("no auto event")
+	}
+}
+
+func TestPhotoCaptionKeptWhenVisionFails(t *testing.T) {
+	emoji := "🗿"
+	j := &recJudge{Result: judge.Result{
+		Verdict: aura.VerdictStrong, Delta: 160, Confidence: 0.8, Comment: "подпись спасла.", Reaction: &emoji,
+	}}
+	p := &recPosterText{}
+	app, _ := setupApp(t, j, p)
+	vis := &stubVision{err: io.EOF}
+	app.SetSpeech(&stubOpen{data: []byte("\xff\xd8\xff")}, nil)
+	app.SetVision(vis)
+	ctx := context.Background()
+	in := mediaWinter(44, store.User{ID: 4, FirstName: "F"}, MediaPhoto, "ph3")
+	in.Duration = 0
+	in.Text = "достаточно длинная подпись к мему"
+	if err := app.Handle(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	if vis.calls != 1 {
+		t.Fatalf("vision should still run, calls=%d", vis.calls)
+	}
+	if j.last.Target.Text != in.Text {
+		t.Fatalf("caption fallback lost: %q", j.last.Target.Text)
+	}
+}
+
+func TestPhotoWithCaptionStillDescribes(t *testing.T) {
+	emoji := "🔥"
+	j := &recJudge{Result: judge.Result{
+		Verdict: aura.VerdictStrong, Delta: 300, Confidence: 0.9, Comment: "мем и подпись.", Reaction: &emoji,
+	}}
+	p := &recPosterText{}
+	app, _ := setupApp(t, j, p)
+	app.SetSpeech(&stubOpen{data: []byte("\xff\xd8\xff")}, nil)
+	app.SetVision(&stubVision{text: "скрин переписки где всех закрыли одной строкой"})
+	ctx := context.Background()
+	in := mediaWinter(45, store.User{ID: 5, FirstName: "G"}, MediaPhoto, "ph4")
+	in.Duration = 0
+	in.Text = "ну это сильно"
+	if err := app.Handle(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(j.last.Target.Text, "[фото]") || !strings.Contains(j.last.Target.Text, "ну это сильно") {
+		t.Fatalf("expected description+caption, got %q", j.last.Target.Text)
+	}
+}
+
+func TestStickerStillNoText(t *testing.T) {
+	p := &recPosterText{}
+	app, _ := setupApp(t, &recJudge{}, p)
+	ctx := context.Background()
+	target := winter(46, store.User{ID: 1, FirstName: "A"}, "")
+	cmd := winter(47, store.User{ID: 2}, "/aura")
+	cmd.Reply = &target
+	if err := app.Handle(ctx, cmd); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.texts) != 1 || p.texts[0] != MsgNoText {
+		t.Fatalf("%q", p.texts)
 	}
 }

@@ -19,6 +19,12 @@ const (
 	DefaultMinTextLen      = 8
 	DefaultLLMTimeoutSec   = 20
 
+	DefaultTranscribeModel  = "openai/whisper-large-v3"
+	DefaultSTTTimeoutSec    = 40
+	DefaultVisionTimeoutSec = 40
+	DefaultMediaMaxSec      = 90
+	DefaultMediaMaxBytes    = 20_000_000
+
 	DefaultReactMinConfidence = 0.62
 	DefaultReactMinAbsDelta   = 80
 	DefaultReactChatCooldown  = 12
@@ -48,6 +54,13 @@ type Config struct {
 	MinTextLen      int
 	LLMTimeout      time.Duration
 
+	TranscribeModel string
+	STTTimeout      time.Duration
+	VisionModel     string
+	VisionTimeout   time.Duration
+	MediaMaxSec     int
+	MediaMaxBytes   int
+
 	ReactMinConfidence float64
 	ReactMinAbsDelta   int
 	ReactChatCooldown  time.Duration
@@ -74,6 +87,12 @@ func Load() (Config, error) {
 		ContextMessages:  envInt("AURA_CONTEXT_MESSAGES", DefaultContextMessages),
 		MinTextLen:       envInt("AURA_MIN_TEXT_LEN", DefaultMinTextLen),
 		LLMTimeout:       time.Duration(envInt("AURA_LLM_TIMEOUT_SEC", DefaultLLMTimeoutSec)) * time.Second,
+		TranscribeModel:  strings.TrimSpace(os.Getenv("OPENAI_TRANSCRIBE_MODEL")),
+		STTTimeout:       time.Duration(envInt("AURA_STT_TIMEOUT_SEC", DefaultSTTTimeoutSec)) * time.Second,
+		VisionModel:      strings.TrimSpace(os.Getenv("OPENAI_VISION_MODEL")),
+		VisionTimeout:    time.Duration(envInt("AURA_VISION_TIMEOUT_SEC", DefaultVisionTimeoutSec)) * time.Second,
+		MediaMaxSec:      envInt("AURA_MEDIA_MAX_SEC", DefaultMediaMaxSec),
+		MediaMaxBytes:    envInt("AURA_MEDIA_MAX_BYTES", DefaultMediaMaxBytes),
 
 		ReactMinConfidence: envFloat("AURA_REACT_MIN_CONFIDENCE", DefaultReactMinConfidence),
 		ReactMinAbsDelta:   envInt("AURA_REACT_MIN_ABS_DELTA", DefaultReactMinAbsDelta),
@@ -95,6 +114,12 @@ func Load() (Config, error) {
 	}
 	if cfg.LogLevel == "" {
 		cfg.LogLevel = DefaultLogLevel
+	}
+	if cfg.TranscribeModel == "" {
+		cfg.TranscribeModel = DefaultTranscribeModel
+	}
+	if cfg.VisionModel == "" {
+		cfg.VisionModel = cfg.OpenAIModel
 	}
 	if id := strings.TrimSpace(os.Getenv("AURA_ALLOWED_CHAT_ID")); id != "" {
 		n, err := strconv.ParseInt(id, 10, 64)

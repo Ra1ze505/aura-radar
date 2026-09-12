@@ -27,6 +27,13 @@ type Incoming struct {
 	UserIsBot bool
 	ViaBot    bool
 	Text      string
+	SpeechRaw string
+	MediaKind string
+	FileID    string
+	FileName  string
+	MIME      string
+	FileSize  int64
+	Duration  int
 	Time      time.Time
 	Reply     *Incoming
 	ThreadID  int
@@ -37,6 +44,9 @@ type App struct {
 	store    store.Store
 	judge    judge.Judge
 	poster   Poster
+	opener   MediaOpener
+	stt      Transcriber
+	vision   Describer
 	inflight *aura.InFlight
 	log      *slog.Logger
 	now      func() time.Time
@@ -83,13 +93,19 @@ func (a *App) Handle(ctx context.Context, in Incoming) error {
 	if in.Reply != nil {
 		replyTo = in.Reply.MessageID
 	}
+	if !isCmd && (in.ChatType == "group" || in.ChatType == "supergroup") && !in.UserIsBot && !in.ViaBot {
+		if err := a.fillMedia(ctx, &in, false); err != nil {
+			a.log.Info("media skip", "reason", err.Error(), "message_id", in.MessageID, "kind", in.MediaKind)
+		}
+	}
 	a.log.Info("update",
 		"chat_id", in.ChatID,
 		"type", in.ChatType,
 		"message_id", in.MessageID,
 		"cmd", cmd,
 		"is_cmd", isCmd,
-		"text_len", runeCount(strings.TrimSpace(in.Text)),
+		"text_len", runeCount(strings.TrimSpace(filterText(in))),
+		"media", in.MediaKind,
 		"reply_to", replyTo,
 	)
 	if !isCmd && strings.TrimSpace(in.Text) != "" && !looksLikeCommand(in.Text) {
@@ -165,7 +181,6 @@ func (a *App) cmdAuraReply(ctx context.Context, in Incoming, target Incoming) er
 	if target.UserIsBot {
 		return a.reply(ctx, in, MsgSkipBots)
 	}
-	text := strings.TrimSpace(target.Text)
 	ev, ok, err := a.store.GetEvent(ctx, in.ChatID, target.MessageID)
 	if err != nil {
 		return err
@@ -174,7 +189,17 @@ func (a *App) cmdAuraReply(ctx context.Context, in Incoming, target Incoming) er
 		_ = a.poster.React(ctx, in.ChatID, target.MessageID, ev.Reaction, aura.BigReaction(ev.Delta))
 		return a.reply(ctx, in, FormatCard(ev.Verdict, ev.Delta, ev.Reaction, ev.Comment))
 	}
+	if err := a.fillMedia(ctx, &target, true); err != nil {
+		return a.reply(ctx, in, mediaFailMessage(err, target))
+	}
+	text := strings.TrimSpace(target.Text)
 	if text == "" {
+		if isImageKind(target.MediaKind) {
+			return a.reply(ctx, in, MsgNoImage)
+		}
+		if isSpeechKind(target.MediaKind) {
+			return a.reply(ctx, in, MsgNoVoice)
+		}
 		return a.reply(ctx, in, MsgNoText)
 	}
 	if a.cfg.Blind() || a.judge == nil {
@@ -306,7 +331,7 @@ func (a *App) maybeRadar(ctx context.Context, in Incoming) error {
 		ChatType:     in.ChatType,
 		FromBot:      in.UserIsBot,
 		ViaBot:       in.ViaBot,
-		Text:         in.Text,
+		Text:         filterText(in),
 		IsCommand:    looksLikeCommand(in.Text),
 		HasEvent:     hasEvent,
 		RadarEnabled: chat.RadarEnabled,
