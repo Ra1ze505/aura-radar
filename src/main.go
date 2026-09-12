@@ -1,7 +1,10 @@
 package main
 
 import (
+	"crypto/tls"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -38,7 +41,16 @@ func main() {
 
 	pref := tele.Settings{
 		Token:  cfg.BotToken,
-		Poller: &tele.LongPoller{Timeout: 10 * time.Second},
+		Client: telegramHTTPClient(),
+		Poller: &tele.LongPoller{
+			Timeout:        10 * time.Second,
+			AllowedUpdates: []string{"message"},
+		},
+		OnError: func(err error, _ tele.Context) {
+			if err != nil {
+				log.Error("telegram", "err", err)
+			}
+		},
 	}
 	b, err := tele.NewBot(pref)
 	if err != nil {
@@ -79,6 +91,29 @@ func main() {
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop
 	b.Stop()
+}
+
+func telegramHTTPClient() *http.Client {
+	// HTTP/2 to api.telegram.org can stall getUpdates (Send-Q stuck,
+	// default Client.Timeout never firing). Stay on HTTP/1.1 and cap the
+	// whole request so a hung poll recovers.
+	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     false,
+		TLSNextProto:          make(map[string]func(authority string, c *tls.Conn) http.RoundTripper),
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 45 * time.Second,
+		IdleConnTimeout:       90 * time.Second,
+		MaxIdleConns:          20,
+	}
+	return &http.Client{
+		Timeout:   45 * time.Second,
+		Transport: transport,
+	}
 }
 
 func newLogger(level string) *slog.Logger {
