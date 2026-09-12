@@ -30,11 +30,13 @@ func NewTelePoster(bot *tele.Bot) *TelePoster {
 	return &TelePoster{bot: bot, admin: make(map[adminKey]adminEntry)}
 }
 
-func (p *TelePoster) Reply(_ context.Context, chatID int64, replyTo int, text string) error {
-	_, err := p.bot.Send(&tele.Chat{ID: chatID}, text, &tele.SendOptions{
+func (p *TelePoster) Reply(_ context.Context, chatID int64, replyTo, threadID int, text string) error {
+	opts := &tele.SendOptions{
 		ReplyTo:           &tele.Message{ID: replyTo, Chat: &tele.Chat{ID: chatID}},
 		AllowWithoutReply: true,
-	})
+		ThreadID:          threadID,
+	}
+	_, err := p.bot.Send(&tele.Chat{ID: chatID}, text, opts)
 	return err
 }
 
@@ -88,6 +90,7 @@ func incomingFromMessage(msg *tele.Message) Incoming {
 		Text:      firstNonEmptyText(msg.Text, msg.Caption),
 		Time:      msg.Time(),
 		MessageID: msg.ID,
+		ThreadID:  msg.ThreadID,
 	}
 	if msg.Chat != nil {
 		in.ChatID = msg.Chat.ID

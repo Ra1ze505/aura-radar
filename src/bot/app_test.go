@@ -20,7 +20,7 @@ type recPoster struct {
 	failReact bool
 }
 
-func (p *recPoster) Reply(context.Context, int64, int, string) error {
+func (p *recPoster) Reply(context.Context, int64, int, int, string) error {
 	return nil
 }
 
@@ -41,7 +41,7 @@ type recPosterText struct {
 	texts []string
 }
 
-func (p *recPosterText) Reply(_ context.Context, _ int64, _ int, text string) error {
+func (p *recPosterText) Reply(_ context.Context, _ int64, _, _ int, text string) error {
 	p.texts = append(p.texts, text)
 	return nil
 }

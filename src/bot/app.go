@@ -13,7 +13,7 @@ import (
 )
 
 type Poster interface {
-	Reply(ctx context.Context, chatID int64, replyTo int, text string) error
+	Reply(ctx context.Context, chatID int64, replyTo, threadID int, text string) error
 	React(ctx context.Context, chatID int64, messageID int, emoji string, big bool) error
 	IsAdmin(ctx context.Context, chatID, userID int64) (bool, error)
 }
@@ -29,6 +29,7 @@ type Incoming struct {
 	Text      string
 	Time      time.Time
 	Reply     *Incoming
+	ThreadID  int
 }
 
 type App struct {
@@ -78,6 +79,19 @@ func (a *App) Handle(ctx context.Context, in Incoming) error {
 		_ = a.store.UpsertUser(ctx, in.Reply.User)
 	}
 	cmd, payload, isCmd := parseCommand(in.Text, a.botUser)
+	replyTo := 0
+	if in.Reply != nil {
+		replyTo = in.Reply.MessageID
+	}
+	a.log.Info("update",
+		"chat_id", in.ChatID,
+		"type", in.ChatType,
+		"message_id", in.MessageID,
+		"cmd", cmd,
+		"is_cmd", isCmd,
+		"text_len", runeCount(strings.TrimSpace(in.Text)),
+		"reply_to", replyTo,
+	)
 	if !isCmd && strings.TrimSpace(in.Text) != "" && !looksLikeCommand(in.Text) {
 		var uid *int64
 		if in.User.ID != 0 {
@@ -210,7 +224,11 @@ func (a *App) replyOwnScore(ctx context.Context, in Incoming) error {
 		return err
 	}
 	name := store.DisplayName(in.User)
-	return a.reply(ctx, in, FormatScore(name, sc, place, total, found))
+	text := FormatScore(name, sc, place, total, found)
+	if !found || (sc.StrongCount+sc.WeakCount) == 0 {
+		text += "\nчтобы оценить ход — реплай /aura на сообщение."
+	}
+	return a.reply(ctx, in, text)
 }
 
 func (a *App) replyScoreByUsername(ctx context.Context, in Incoming, username string) error {
@@ -284,7 +302,7 @@ func (a *App) maybeRadar(ctx context.Context, in Incoming) error {
 		return err
 	}
 	_ = ev
-	ok, _ := aura.CheapFilters(aura.FilterInput{
+	ok, reason := aura.CheapFilters(aura.FilterInput{
 		ChatType:     in.ChatType,
 		FromBot:      in.UserIsBot,
 		ViaBot:       in.ViaBot,
@@ -296,6 +314,7 @@ func (a *App) maybeRadar(ctx context.Context, in Incoming) error {
 		MinTextLen:   a.cfg.MinTextLen,
 	})
 	if !ok {
+		a.log.Info("radar skip", "reason", reason, "message_id", in.MessageID, "text_len", runeCount(strings.TrimSpace(in.Text)))
 		return nil
 	}
 	if a.cfg.Blind() || a.judge == nil {
@@ -322,6 +341,12 @@ func (a *App) maybeRadar(ctx context.Context, in Incoming) error {
 		TextMinAbsDelta:    a.cfg.TextMinAbsDelta,
 	}, cd)
 	if decision == aura.DecisionNone {
+		a.log.Info("radar none",
+			"message_id", in.MessageID,
+			"verdict", res.Verdict,
+			"delta", res.Delta,
+			"confidence", res.Confidence,
+		)
 		return nil
 	}
 	emoji := res.ReactionEmoji()
@@ -353,7 +378,7 @@ func (a *App) maybeRadar(ctx context.Context, in Incoming) error {
 		return nil
 	}
 	card := FormatCard(res.Verdict, res.Delta, emoji, res.Comment)
-	if err := a.poster.Reply(ctx, in.ChatID, in.MessageID, card); err != nil {
+	if err := a.poster.Reply(ctx, in.ChatID, in.MessageID, in.ThreadID, card); err != nil {
 		a.log.Warn("auto text failed", "err", err)
 		return nil
 	}
@@ -408,5 +433,5 @@ func (a *App) evaluate(ctx context.Context, chatID int64, title string, target I
 }
 
 func (a *App) reply(ctx context.Context, in Incoming, text string) error {
-	return a.poster.Reply(ctx, in.ChatID, in.MessageID, text)
+	return a.poster.Reply(ctx, in.ChatID, in.MessageID, in.ThreadID, text)
 }
