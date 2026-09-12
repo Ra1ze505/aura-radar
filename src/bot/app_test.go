@@ -62,6 +62,7 @@ func setupApp(t *testing.T, j judge.Judge, poster Poster) (*App, store.Store) {
 		MinTextLen:         8,
 		LLMTimeout:         time.Second,
 		STTTimeout:         40 * time.Second,
+		VisionTimeout:      40 * time.Second,
 		MediaMaxSec:        90,
 		MediaMaxBytes:      20_000_000,
 		TranscribeModel:    "whisper-test",
@@ -545,5 +546,157 @@ func TestAuraVoiceEvaluatesTranscript(t *testing.T) {
 	}
 	if len(p.texts) != 1 || !strings.Contains(p.texts[0], "+350") {
 		t.Fatalf("reply %q", p.texts)
+	}
+}
+
+type stubVision struct {
+	calls int
+	text  string
+	err   error
+}
+
+func (s *stubVision) Describe(context.Context, io.Reader, string, string) (string, error) {
+	s.calls++
+	if s.err != nil {
+		return "", s.err
+	}
+	return s.text, nil
+}
+
+func TestPhotoAutoDescribesAndJudges(t *testing.T) {
+	emoji := "🤣"
+	j := &recJudge{Result: judge.Result{
+		Verdict: aura.VerdictStrong, Delta: 250, Confidence: 0.88,
+		Comment: "мем без подписи.", Reaction: &emoji,
+	}}
+	p := &recPosterText{}
+	app, st := setupApp(t, j, p)
+	vis := &stubVision{text: "кот в очках закрыл тему одним взглядом"}
+	app.SetSpeech(&stubOpen{data: []byte("\xff\xd8\xff")}, nil)
+	app.SetVision(vis)
+	ctx := context.Background()
+	in := mediaWinter(40, store.User{ID: 21, FirstName: "P"}, MediaPhoto, "ph-1")
+	in.Duration = 0
+	if err := app.Handle(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	if vis.calls != 1 {
+		t.Fatalf("vision calls %d", vis.calls)
+	}
+	if !strings.HasPrefix(j.last.Target.Text, "[фото] ") {
+		t.Fatalf("judge text %q", j.last.Target.Text)
+	}
+	if len(p.reacts) != 1 {
+		t.Fatalf("reacts %v", p.reacts)
+	}
+	if _, ok, _ := st.GetEvent(ctx, -100, 40); !ok {
+		t.Fatal("expected auto event")
+	}
+}
+
+func TestAuraEmptyVisionNoScore(t *testing.T) {
+	j := &recJudge{Result: judge.Result{Verdict: aura.VerdictStrong, Delta: 400, Confidence: 0.9, Comment: "x"}}
+	p := &recPosterText{}
+	app, st := setupApp(t, j, p)
+	app.SetSpeech(&stubOpen{data: []byte("\xff\xd8\xff")}, nil)
+	app.SetVision(&stubVision{text: "  "})
+	ctx := context.Background()
+	target := mediaWinter(41, store.User{ID: 1, FirstName: "A"}, MediaPhoto, "ph")
+	target.Duration = 0
+	cmd := winter(42, store.User{ID: 2, FirstName: "B"}, "/aura")
+	cmd.Reply = &target
+	if err := app.Handle(ctx, cmd); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.texts) != 1 || p.texts[0] != MsgNoImage {
+		t.Fatalf("replies %q", p.texts)
+	}
+	if _, ok, _ := st.GetEvent(ctx, -100, 41); ok {
+		t.Fatal("no event")
+	}
+}
+
+func TestAutoEmptyVisionSilent(t *testing.T) {
+	j := &recJudge{Result: judge.Result{Verdict: aura.VerdictStrong, Delta: 200, Confidence: 0.9, Comment: "x"}}
+	p := &recPosterText{}
+	app, st := setupApp(t, j, p)
+	vis := &stubVision{text: ""}
+	app.SetSpeech(&stubOpen{data: []byte("\xff\xd8\xff")}, nil)
+	app.SetVision(vis)
+	ctx := context.Background()
+	in := mediaWinter(43, store.User{ID: 9, FirstName: "E"}, MediaPhoto, "ph2")
+	in.Duration = 0
+	if err := app.Handle(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	if vis.calls != 1 {
+		t.Fatalf("vision calls %d", vis.calls)
+	}
+	if len(p.reacts) != 0 || len(p.texts) != 0 {
+		t.Fatalf("must be silent reacts=%v texts=%v", p.reacts, p.texts)
+	}
+	if _, ok, _ := st.GetEvent(ctx, -100, 43); ok {
+		t.Fatal("no auto event")
+	}
+}
+
+func TestPhotoCaptionKeptWhenVisionFails(t *testing.T) {
+	emoji := "🗿"
+	j := &recJudge{Result: judge.Result{
+		Verdict: aura.VerdictStrong, Delta: 160, Confidence: 0.8, Comment: "подпись спасла.", Reaction: &emoji,
+	}}
+	p := &recPosterText{}
+	app, _ := setupApp(t, j, p)
+	vis := &stubVision{err: io.EOF}
+	app.SetSpeech(&stubOpen{data: []byte("\xff\xd8\xff")}, nil)
+	app.SetVision(vis)
+	ctx := context.Background()
+	in := mediaWinter(44, store.User{ID: 4, FirstName: "F"}, MediaPhoto, "ph3")
+	in.Duration = 0
+	in.Text = "достаточно длинная подпись к мему"
+	if err := app.Handle(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	if vis.calls != 1 {
+		t.Fatalf("vision should still run, calls=%d", vis.calls)
+	}
+	if j.last.Target.Text != in.Text {
+		t.Fatalf("caption fallback lost: %q", j.last.Target.Text)
+	}
+}
+
+func TestPhotoWithCaptionStillDescribes(t *testing.T) {
+	emoji := "🔥"
+	j := &recJudge{Result: judge.Result{
+		Verdict: aura.VerdictStrong, Delta: 300, Confidence: 0.9, Comment: "мем и подпись.", Reaction: &emoji,
+	}}
+	p := &recPosterText{}
+	app, _ := setupApp(t, j, p)
+	app.SetSpeech(&stubOpen{data: []byte("\xff\xd8\xff")}, nil)
+	app.SetVision(&stubVision{text: "скрин переписки где всех закрыли одной строкой"})
+	ctx := context.Background()
+	in := mediaWinter(45, store.User{ID: 5, FirstName: "G"}, MediaPhoto, "ph4")
+	in.Duration = 0
+	in.Text = "ну это сильно"
+	if err := app.Handle(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(j.last.Target.Text, "[фото]") || !strings.Contains(j.last.Target.Text, "ну это сильно") {
+		t.Fatalf("expected description+caption, got %q", j.last.Target.Text)
+	}
+}
+
+func TestStickerStillNoText(t *testing.T) {
+	p := &recPosterText{}
+	app, _ := setupApp(t, &recJudge{}, p)
+	ctx := context.Background()
+	target := winter(46, store.User{ID: 1, FirstName: "A"}, "")
+	cmd := winter(47, store.User{ID: 2}, "/aura")
+	cmd.Reply = &target
+	if err := app.Handle(ctx, cmd); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.texts) != 1 || p.texts[0] != MsgNoText {
+		t.Fatalf("%q", p.texts)
 	}
 }

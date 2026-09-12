@@ -46,6 +46,7 @@ type App struct {
 	poster   Poster
 	opener   MediaOpener
 	stt      Transcriber
+	vision   Describer
 	inflight *aura.InFlight
 	log      *slog.Logger
 	now      func() time.Time
@@ -93,8 +94,8 @@ func (a *App) Handle(ctx context.Context, in Incoming) error {
 		replyTo = in.Reply.MessageID
 	}
 	if !isCmd && (in.ChatType == "group" || in.ChatType == "supergroup") && !in.UserIsBot && !in.ViaBot {
-		if err := a.fillSpeech(ctx, &in, false); err != nil {
-			a.log.Info("stt skip", "reason", err.Error(), "message_id", in.MessageID, "kind", in.MediaKind)
+		if err := a.fillMedia(ctx, &in, false); err != nil {
+			a.log.Info("media skip", "reason", err.Error(), "message_id", in.MessageID, "kind", in.MediaKind)
 		}
 	}
 	a.log.Info("update",
@@ -188,12 +189,15 @@ func (a *App) cmdAuraReply(ctx context.Context, in Incoming, target Incoming) er
 		_ = a.poster.React(ctx, in.ChatID, target.MessageID, ev.Reaction, aura.BigReaction(ev.Delta))
 		return a.reply(ctx, in, FormatCard(ev.Verdict, ev.Delta, ev.Reaction, ev.Comment))
 	}
-	if err := a.fillSpeech(ctx, &target, true); err != nil {
-		return a.reply(ctx, in, MsgNoVoice)
+	if err := a.fillMedia(ctx, &target, true); err != nil {
+		return a.reply(ctx, in, mediaFailMessage(err, target))
 	}
 	text := strings.TrimSpace(target.Text)
 	if text == "" {
-		if target.MediaKind != "" {
+		if isImageKind(target.MediaKind) {
+			return a.reply(ctx, in, MsgNoImage)
+		}
+		if isSpeechKind(target.MediaKind) {
 			return a.reply(ctx, in, MsgNoVoice)
 		}
 		return a.reply(ctx, in, MsgNoText)

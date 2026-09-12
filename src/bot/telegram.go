@@ -191,5 +191,17 @@ func attachMedia(in *Incoming, msg *tele.Message) {
 		in.Duration = msg.Video.Duration
 		in.MIME = msg.Video.MIME
 		in.FileName = defaultMediaName(MediaVideo, msg.Video.FileName)
+	case msg.Photo != nil:
+		in.MediaKind = MediaPhoto
+		in.FileID = msg.Photo.FileID
+		in.FileSize = msg.Photo.FileSize
+		in.FileName = defaultMediaName(MediaPhoto, "")
+		in.MIME = defaultMediaMIME(MediaPhoto, "")
+	case msg.Document != nil && isImageMIME(msg.Document.MIME):
+		in.MediaKind = MediaPhoto
+		in.FileID = msg.Document.FileID
+		in.FileSize = msg.Document.FileSize
+		in.MIME = msg.Document.MIME
+		in.FileName = defaultMediaName(MediaPhoto, msg.Document.FileName)
 	}
 }

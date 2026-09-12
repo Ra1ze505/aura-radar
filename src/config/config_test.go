@@ -12,7 +12,9 @@ func TestLoadFallbacksAndDefaults(t *testing.T) {
 	t.Setenv("AURA_RADAR_OPENAI_API_KEY", "llm-secret")
 	t.Setenv("OPENAI_MODEL", "x-ai/grok-4.6")
 	t.Setenv("OPENAI_TRANSCRIBE_MODEL", "")
+	t.Setenv("OPENAI_VISION_MODEL", "")
 	t.Setenv("AURA_STT_TIMEOUT_SEC", "")
+	t.Setenv("AURA_VISION_TIMEOUT_SEC", "")
 	t.Setenv("AURA_MEDIA_MAX_SEC", "")
 	t.Setenv("AURA_MEDIA_MAX_BYTES", "")
 	t.Setenv("AURA_ALLOWED_CHAT_ID", "-1004468217243")
@@ -39,6 +41,12 @@ func TestLoadFallbacksAndDefaults(t *testing.T) {
 	}
 	if cfg.STTTimeout != DefaultSTTTimeoutSec*time.Second {
 		t.Fatalf("stt timeout %v", cfg.STTTimeout)
+	}
+	if cfg.VisionModel != "x-ai/grok-4.6" {
+		t.Fatalf("vision model should follow OPENAI_MODEL, got %q", cfg.VisionModel)
+	}
+	if cfg.VisionTimeout != DefaultVisionTimeoutSec*time.Second {
+		t.Fatalf("vision timeout %v", cfg.VisionTimeout)
 	}
 	if cfg.MediaMaxSec != DefaultMediaMaxSec || cfg.MediaMaxBytes != DefaultMediaMaxBytes {
 		t.Fatalf("media caps %d %d", cfg.MediaMaxSec, cfg.MediaMaxBytes)

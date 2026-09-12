@@ -16,6 +16,7 @@ import (
 	"github.com/Ra1ze505/aura-radar/src/judge"
 	"github.com/Ra1ze505/aura-radar/src/store"
 	"github.com/Ra1ze505/aura-radar/src/transcribe"
+	"github.com/Ra1ze505/aura-radar/src/vision"
 
 	tele "gopkg.in/telebot.v4"
 )
@@ -71,6 +72,10 @@ func main() {
 	if cfg.OpenAIAPIKey != "" {
 		stt := transcribe.New(cfg.OpenAIAPIKey, cfg.OpenAIBaseURL, cfg.TranscribeModel, cfg.STTTimeout)
 		app.SetSpeech(poster, stt)
+		if cfg.VisionModel != "" {
+			vis := vision.New(cfg.OpenAIAPIKey, cfg.OpenAIBaseURL, cfg.VisionModel, cfg.VisionTimeout)
+			app.SetVision(vis)
+		}
 	}
 	bot.Register(b, app)
 

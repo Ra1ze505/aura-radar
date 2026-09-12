@@ -19,10 +19,11 @@ const (
 	DefaultMinTextLen      = 8
 	DefaultLLMTimeoutSec   = 20
 
-	DefaultTranscribeModel = "openai/whisper-large-v3"
-	DefaultSTTTimeoutSec   = 40
-	DefaultMediaMaxSec     = 90
-	DefaultMediaMaxBytes   = 20_000_000
+	DefaultTranscribeModel  = "openai/whisper-large-v3"
+	DefaultSTTTimeoutSec    = 40
+	DefaultVisionTimeoutSec = 40
+	DefaultMediaMaxSec      = 90
+	DefaultMediaMaxBytes    = 20_000_000
 
 	DefaultReactMinConfidence = 0.62
 	DefaultReactMinAbsDelta   = 80
@@ -55,6 +56,8 @@ type Config struct {
 
 	TranscribeModel string
 	STTTimeout      time.Duration
+	VisionModel     string
+	VisionTimeout   time.Duration
 	MediaMaxSec     int
 	MediaMaxBytes   int
 
@@ -86,6 +89,8 @@ func Load() (Config, error) {
 		LLMTimeout:       time.Duration(envInt("AURA_LLM_TIMEOUT_SEC", DefaultLLMTimeoutSec)) * time.Second,
 		TranscribeModel:  strings.TrimSpace(os.Getenv("OPENAI_TRANSCRIBE_MODEL")),
 		STTTimeout:       time.Duration(envInt("AURA_STT_TIMEOUT_SEC", DefaultSTTTimeoutSec)) * time.Second,
+		VisionModel:      strings.TrimSpace(os.Getenv("OPENAI_VISION_MODEL")),
+		VisionTimeout:    time.Duration(envInt("AURA_VISION_TIMEOUT_SEC", DefaultVisionTimeoutSec)) * time.Second,
 		MediaMaxSec:      envInt("AURA_MEDIA_MAX_SEC", DefaultMediaMaxSec),
 		MediaMaxBytes:    envInt("AURA_MEDIA_MAX_BYTES", DefaultMediaMaxBytes),
 
@@ -112,6 +117,9 @@ func Load() (Config, error) {
 	}
 	if cfg.TranscribeModel == "" {
 		cfg.TranscribeModel = DefaultTranscribeModel
+	}
+	if cfg.VisionModel == "" {
+		cfg.VisionModel = cfg.OpenAIModel
 	}
 	if id := strings.TrimSpace(os.Getenv("AURA_ALLOWED_CHAT_ID")); id != "" {
 		n, err := strconv.ParseInt(id, 10, 64)
