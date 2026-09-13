@@ -1,7 +1,7 @@
 package bot
 
 const (
-	MsgStartPrivate = "Aura Radar — мемный радар харизмы хода в групповом чате.\n\n" +
+	MsgStartPrivate = "Aura Radar — мемный радар ауры в групповом чате: зал и winter arc vs сопли про чувства.\n\n" +
 		"1) Добавь меня в группу.\n" +
 		"2) В BotFather: /setprivacy → Disable, иначе не вижу переписку и не из чего брать контекст.\n" +
 		"3) Реакции ставлю сам часто, текстом врываюсь редко.\n" +
