@@ -65,3 +65,15 @@ func looksLikeCommand(text string) bool {
 }
 
 func runeCount(s string) int { return utf8.RuneCountInString(s) }
+
+func clipPreview(s string, n int) string {
+	s = strings.TrimSpace(s)
+	if n < 1 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+	return string(runes[:n])
+}

@@ -91,3 +91,12 @@ func TestExtractJSONFence(t *testing.T) {
 		t.Fatalf("neutral reaction %+v", r.Reaction)
 	}
 }
+
+func TestSystemPromptPainIsNotRomance(t *testing.T) {
+	p := SystemPrompt()
+	for _, need := range []string{"полюбить боль", "pain→«пах»", "романтическая любовь"} {
+		if !strings.Contains(p, need) {
+			t.Fatalf("missing %q in judge prompt", need)
+		}
+	}
+}

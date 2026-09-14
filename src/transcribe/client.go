@@ -12,6 +12,10 @@ import (
 	"github.com/openai/openai-go/option"
 )
 
+// whisperHint biases STT toward gym/pain vocabulary without locking the language.
+// Keep it short: Whisper uses this as a prefix of the same language as the audio.
+const whisperHint = "Pain is the only path to change. Love the pain. Discipline, gym, winter arc. Боль, дисциплина, зал. Полюбить боль."
+
 // Client talks to an OpenAI-compatible /audio/transcriptions endpoint.
 type Client struct {
 	api   openai.Client
@@ -55,9 +59,10 @@ func (c *Client) Transcribe(ctx context.Context, r io.Reader, filename, mime str
 		mime = "application/octet-stream"
 	}
 	res, err := c.api.Audio.Transcriptions.New(ctx, openai.AudioTranscriptionNewParams{
-		File:     openai.File(bytes.NewReader(data), filename, mime),
-		Model:    c.model,
-		Language: openai.String("ru"),
+		File:  openai.File(bytes.NewReader(data), filename, mime),
+		Model: c.model,
+		// Do not force ru: gym clips are often English. Forced ru turns "pain" into «пах».
+		Prompt: openai.String(whisperHint),
 	})
 	if err != nil {
 		return "", fmt.Errorf("transcribe: %w", err)

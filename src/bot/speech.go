@@ -201,7 +201,7 @@ func (a *App) fillSpeech(ctx context.Context, in *Incoming, command bool) error 
 	}
 	in.SpeechRaw = raw
 	in.Text = speechPrefix(in.MediaKind) + " " + raw
-	a.log.Info("stt ok", "kind", in.MediaKind, "raw_len", runeCount(raw), "message_id", in.MessageID)
+	a.log.Info("stt ok", "kind", in.MediaKind, "raw_len", runeCount(raw), "message_id", in.MessageID, "preview", clipPreview(raw, 80))
 	return nil
 }
 
